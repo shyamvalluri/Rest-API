@@ -1,0 +1,89 @@
+# Replace these with your own values
+$organization = "Your_Org_Name"
+$AzureDevOpsPAT = "Your_PAT_Token"
+
+$AzureDevOpsAuthenicationHeader = @{Authorization = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$($AzureDevOpsPAT)")) }
+
+# Get all projects in the organization
+$projectsUrl = "https://dev.azure.com/$($organization)/_apis/projects?api-version=7.1"
+$projectsResponse = Invoke-RestMethod -Uri $projectsUrl -Method Get -Headers $AzureDevOpsAuthenicationHeader
+$projects = $projectsResponse.value
+
+$records = @()
+
+foreach ($project in $projects) {
+    # Get all builds for the project
+    $buildsUrl = "https://dev.azure.com/$($organization)/$($project.name)/_apis/build/builds?api-version=7.1"
+    $buildsResponse = Invoke-RestMethod -Uri $buildsUrl -Method Get -Headers $AzureDevOpsAuthenicationHeader
+    $builds = $buildsResponse.value
+
+    foreach ($build in $builds) {
+        # Get the build logs
+        $logsUrl = "https://dev.azure.com/$($organization)/$($project.name)/_apis/build/builds/$($build.id)/logs?api-version=7.1"
+        $logsResponse = Invoke-RestMethod -Uri $logsUrl -Method Get -Headers $AzureDevOpsAuthenicationHeader
+        $logs = $logsResponse.value
+
+        foreach ($log in $logs) {
+            # Download the log file
+            $logUrl = $log.url
+            $logResponse = Invoke-WebRequest -Uri $logUrl -Headers $AzureDevOpsAuthenicationHeader -Method Get
+            $logContent = $logResponse.Content
+
+            # Split the log content into lines
+            $logLines = $logContent -split '\r?\n'
+
+            # Check if the first line contains "Initialize job"
+            if ($logLines[0] -like "*Initialize job*") {
+                # Extract Agent name, Agent machine name, and Current agent version
+                $agentName = $null
+                $agentMachineName = $null
+                $currentAgentVersion = $null
+                $operatingSystem = "Not defined due to the self-hosted agent"
+
+                $osStartIndex = -1
+                $osEndIndex = -1
+                $foundEndGroup = $false
+
+                for ($i = 0; $i -lt $logLines.Count; $i++) {
+                    if ($logLines[$i] -like "*Agent name:*") {
+                        $agentName = $logLines[$i] -replace ".*Agent name: '([^']+)'.*", '$1'
+                    } elseif ($logLines[$i] -like "*Agent machine name:*") {
+                        $agentMachineName = $logLines[$i] -replace ".*Agent machine name: '([^']+)'.*", '$1'
+                    } elseif ($logLines[$i] -like "*Current agent version:*") {
+                        $currentAgentVersion = $logLines[$i] -replace ".*Current agent version: '([^']+)'.*", '$1'
+                    } elseif ($logLines[$i] -like "*Operating System*") {
+                        $osStartIndex = $i + 1
+                    } elseif ($logLines[$i] -like "*endgroup*" -and $osStartIndex -ne -1) {
+                        $osEndIndex = $i - 1
+                        break  
+                    }
+                }
+
+                if ($osStartIndex -ne -1 -and $osEndIndex -ne -1) {
+                    $operatingSystem = ($logLines[$osStartIndex..$osEndIndex] | ForEach-Object { $_ -replace '^\S+Z\s+' } | ForEach-Object { $_.Trim() } ) -join ' '
+                }
+
+                # Create a record
+                $record = [PSCustomObject]@{
+                    Organization = $organization
+                    ProjectName = $project.name
+                    PipelineName = $build.definition.name
+                    RunId = $build.id
+                    AgentName = $agentName
+                    AgentMachineName = $agentMachineName
+                    CurrentAgentVersion = $currentAgentVersion
+                    OperatingSystem = $operatingSystem
+                }
+
+                # Add the record to the records array
+                $records += $record
+            }
+        }
+    }
+}
+
+# Display the records in a table format
+$fileName = "downloads\build\build_info.csv"
+#$records | Format-Table -AutoSize
+$records | Export-Csv -Path $fileName -NoTypeInformation
+Write-Host "CSv file generated"
