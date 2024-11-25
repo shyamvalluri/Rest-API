@@ -1,0 +1,70 @@
+param(
+  [parameter(Mandatory=$true)]
+  [string] $AgentDirectory,
+  [parameter(Mandatory=$true)]
+  [string] $NewAgentName,
+  [parameter(Mandatory=$true)]
+  [string] $PAT
+)
+
+# save before editing
+Copy-Item "$AgentDirectory/.agent" -Destination "$AgentDirectory/.agent.bak"
+Copy-Item "$AgentDirectory/.service" -Destination "$AgentDirectory/.service.bak"
+
+# read current configuration
+$agentConfiguration = Get-Content "$AgentDirectory/.agent" | ConvertFrom-Json
+$serviceName = Get-Content "$AgentDirectory/.service"
+$agentId = $agentConfiguration.agentId
+$poolId = $agentConfiguration.poolId
+$baseOrgURL = $agentConfiguration.serverUrl
+$headers = @{
+  Authorization = "Basic $( [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":${PAT}")) )"
+}
+$apiVersion = "api-version=7.2-preview.1"
+
+#	Disable the agent
+$disablePayload = @{ "id"= $agentId; "enabled"= $false } | ConvertTo-Json
+Invoke-RestMethod -Method Patch -Uri "${baseOrgURL}/_apis/distributedtask/pools/${poolId}/agents/${agentId}?${apiVersion}" -Body $disablePayload -ContentType 'application/json' -Header $headers
+
+#	Wait for the agent to complete any running job
+$busy = $true
+while ($busy) {
+  $agentStateResponse = Invoke-RestMethod -Method Patch -Uri "${baseOrgURL}/_apis/distributedtask/pools/${poolId}/agents/${agentId}?includeAssignedRequest=true&${apiVersion}" -Body $disablePayload -ContentType 'application/json' -Header $headers
+  $busy = $agentStateResponse.assignedRequest -ne $null
+}
+
+# Stop the agent WinService / systemd service
+if ([System.Environment]::OSVersion.Platform -eq 'Win32NT') {
+  Stop-Service $serviceName
+} else {
+  # Mac/Linux use svc.sh
+  sudo ./svc.sh stop
+}
+
+#	Edit .agent file with new name
+$agentConfiguration.agentName = $NewAgentName
+$agentConfiguration | ConvertTo-Json | Set-Content "$AgentDirectory/.agent"
+#	Rename the agent WinService / systemd service
+if ([System.Environment]::OSVersion.Platform -eq 'Win32NT') {
+  # NB This changes only the DESCRIPTION of the winsvc!!!
+  Set-Service -Name $serviceName -DisplayName "Azure Pipeline Agent (${NewAgentName})"
+} else {
+  # TODO for Mac/Linux using svc.sh
+  Write-Warning "Not implemented: service name will not change to ${NewAgentName}"
+}
+
+#	Rename the agent
+$renamePayload = @{ "id"= $agentId; "name"= $NewAgentName } | ConvertTo-Json
+Invoke-RestMethod -Method Patch -Uri "${baseOrgURL}/_apis/distributedtask/pools/${poolId}/agents/${agentId}?${apiVersion}" -Body $renamePayload -ContentType 'application/json' -Header $headers
+
+#	Start the agent WinService / systemd service
+if ([System.Environment]::OSVersion.Platform -eq 'Win32NT') {
+  Start-Service $serviceName
+} else {
+  # Mac/Linux use svc.sh
+  sudo ./svc.sh start
+}
+
+#	Enable the agent
+$enablePayload = @{ "id"= $agentId; "enabled"= $true } | ConvertTo-Json
+Invoke-RestMethod -Method Patch -Uri "${baseOrgURL}/_apis/distributedtask/pools/${poolId}/agents/${agentId}?${apiVersion}" -Body $enablePayload -ContentType 'application/json' -Header $headers
