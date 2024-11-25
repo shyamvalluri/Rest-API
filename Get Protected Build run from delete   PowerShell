@@ -1,0 +1,50 @@
+## Script 1: Identifies all leases currently protecting the pipeline to delete.
+
+# Get all projects in the organization
+$OrganizationName = "<<your Organization Name>>"
+ 
+# Set your personal access token (PAT)
+$AzureDevOpsPAT = "<<ADD yours PAT token>>"
+ 
+$AzureDevOpsAuthenicationHeader = @{Authorization = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$($AzureDevOpsPAT)")) }
+ 
+$apiEndpoint = "https://dev.azure.com/$($OrganizationName)/_apis/"
+$projectsResponse = Invoke-RestMethod -Uri ($apiEndpoint + "projects?api-version=7.1-preview.4") -Method Get -Headers $AzureDevOpsAuthenicationHeader
+$projects = $projectsResponse.value
+ 
+# Loop through each project and get all definitions
+$definitions = @()
+foreach ($project in $projects) {
+   $projectName = $project.name
+   #Write-Host "Getting definitions for project $projectName..."
+   $defapiEndpoint = "https://dev.azure.com/$($OrganizationName)/$($projectName)/_apis/"
+   $definitionsResponse = Invoke-RestMethod -Uri ($defapiEndpoint + "build/definitions?api-version=7.1-preview.7") -Method Get -Headers $AzureDevOpsAuthenicationHeader
+   $definitions += $definitionsResponse.value
+}
+ 
+# Sort the definitions in ascending order by name
+$definitions = $definitions | Sort-Object -Property name
+ 
+# Loop through each definition and get related lease IDs
+$definitionLeases = @()
+foreach ($definition in $definitions) {
+   $definitionId = $definition.id
+   $projectName = $definition.project.name
+   $uri = "https://dev.azure.com/$($OrganizationName )/$($projectName)/_apis/build/retention/leases?api-version=6.0-preview.1&definitionId=$($definitionId)"
+ 
+   $response = Invoke-RestMethod -Uri $uri -Method get -Headers $AzureDevOpsAuthenicationHeader 
+   $filteredResponse = $response.value | Where-Object {$_.protectPipeline -eq $true}
+   foreach ($lease in $filteredResponse) {
+       $definitionLeases += [PSCustomObject]@{
+           Project = $projectName
+           PipelineName = $definition.name
+           DefinitionId = $definitionId
+           LeaseId = $lease.leaseId
+           RunId = $lease.runId
+           #Url = $definition.url
+       }
+   }
+}
+ 
+# Output the definition leases
+$definitionLeases | Format-Table -Property Project, PipelineName, DefinitionId, LeaseId, RunId -AutoSize
