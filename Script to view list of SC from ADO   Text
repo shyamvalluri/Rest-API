@@ -1,0 +1,21 @@
+$organization = "your-organization-name"
+$project = "your-project-name"
+$pat = "your-personal-access-token"
+
+$headers = @{
+    Authorization = "Bearer $pat"
+    ContentType = "application/json"
+}
+
+$uri = "https://dev.azure.com/$organization/$project/_apis/serviceendpoint/endpoints?api-version=6.0"
+
+$response = Invoke-RestMethod -Uri $uri -Method Get -Headers $headers
+
+$response.value | ForEach-Object {
+    $endpoint = $_
+    $auth = $endpoint.authentication
+    if ($auth -and $auth.type -eq "AzureResourceManager") {
+        $appRegistrationName = $auth.parameters.appId
+        Write-Host "Service Connection: $($endpoint.name) - App Registration: $appRegistrationName"
+    }
+}
