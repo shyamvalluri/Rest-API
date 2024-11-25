@@ -1,0 +1,61 @@
+# PAT: Full PAT Token Access
+# organisation_name: Customer Org Nanem
+# App_ID: Service principle Application(Client ID) ID
+# App_Key: Service Principle Secret
+# AZ_Tenant: Tenant ID
+ 
+# in the body replace 
+# orgionID: AAD Group ID
+# ProjectRef: Project reference ID
+
+
+# Declaring Variables
+$PAT = ""
+$organisation_name = ""
+$App_ID = ""
+$App_Key = ""
+$AZ_Tenant = ""
+# Authenticate to Azure DevOps
+$headers = @{Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$PAT"))}
+
+# Azure Authentication
+az login --service-principal -u $App_ID -p $App_Key --tenant $AZ_Tenant
+
+# Define the JSON body
+
+# Define the JSON body
+$body = @{
+    extensionRules = @()
+    group = @{
+        origin = "aad"
+        originId = ""
+        subjectKind = "group"
+    }
+    id = $null
+    licenseRule = @{
+        licensingSource = "account"
+        accountLicenseType = "express"
+        licenseDisplayName = "Basic"
+    }
+    projectEntitlements = @(
+        @{
+            group = @{
+                groupType = "projectContributor"
+            }
+            projectRef = @{
+                id = ""
+            }
+        }
+    )
+} | ConvertTo-Json -Depth 10  # Increase depth if necessary
+
+$uri = "https://vsaex.dev.azure.com/$organisation_name/_apis/groupentitlements?api-version=7.1"
+
+# Make the POST request
+try {
+    $response = Invoke-RestMethod -Uri $uri -Method Post -Headers $headers -Body $body -ContentType "application/json"
+    # Output the response
+    $response
+} catch {
+    Write-Host "Error occurred: $_"
+}
