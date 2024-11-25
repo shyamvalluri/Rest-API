@@ -1,0 +1,43 @@
+### Declaring Variables
+$PAT = "FULL_ACCESS_PAT"
+$storage_account = "STORAGE_ACCOUNT_NAME"
+$container_name = "CONTAINER_NAME"
+$AZURE_STORAGE_ACCOUNT_KEY = "STORAGE_ACCOUNT_ACCESS_KEY"
+$organisation_name = "ORG_NAME"
+$project = "PROJECT_NAME"
+$d = (Get-Date).ToString("yyyy-MM-dd")
+
+# Authenticate to Azure DevOps
+$headers = @{Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$PAT"))}
+
+# Get all repositories
+$repos = Invoke-RestMethod -Uri "https://dev.azure.com/$(organisation_name)/$(project)/_apis/git/repositories?api-version=6.0" -Method Get -Headers $headers
+
+# Loop through each repository and back it up
+foreach ($repo in $repos.value) {
+    $repoName = $repo.name
+    $zipping = "$project-$repoName-backup-$d.zip"
+
+    # Clone the repository
+    # Write-Host "Cloning repository: $repoName"
+    try {
+        $url = "https://$PAT@dev.azure.com/$organisation_name/$project/_git/$repoName"
+        git clone $url 
+    } catch {
+        Write-Host "Error cloning repository $repoName - $_"
+        continue # Skip to the next repository
+    }
+
+    # Zip the cloned repository
+    Write-Host "Zipping repository: $repoName"
+    try {
+        # Compress the cloned repository to a zip file
+        zip -r ./$zipping ./$repoName/*
+    } catch {
+        Write-Host "Error zipping repository $repoName - $_"
+        continue # Skip to the next repository
+    }
+
+    # Copy Directory containing repositories backups to a Storage Account Container
+    az storage blob upload --account-name $(storage_account) --account-key $(AZURE_STORAGE_ACCOUNT_KEY) --container-name $(container_name) --name "$project/$repoName/$d/$zipping" --file "./$zipping" --overwrite true
+}
