@@ -1,0 +1,88 @@
+# Replace these with your own values
+$organization = "OrgName"
+$project = "ProjectID/ProjectName"
+$buildId = "Build_pipeline_run_id"
+$AzureDevOpsPAT = "Yourpattoken"
+
+$AzureDevOpsAuthenicationHeader = @{Authorization = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$($AzureDevOpsPAT)")) }
+   
+$url = "https://dev.azure.com/$($organization)/$($project)/_apis/build/builds/$($buildId)?api-version=7.1-preview.1"
+  
+# Send a request to status of the Build run
+$buildPipeline = Invoke-RestMethod -Uri $url -Method get -Headers $AzureDevOpsAuthenicationHeader 
+$buildStatus = $buildPipeline.status
+
+$url = "https://dev.azure.com/$organization/$project/_apis/build/builds/$buildId/logs?$format=zip"
+
+# Send a request to get information to get logs from the specific build
+$response = Invoke-WebRequest -Uri $url -Headers $AzureDevOpsAuthenicationHeader -Method Get 
+
+Write-Host $response.Content
+
+$jsonObject = $response.Content | ConvertFrom-Json
+
+$checkoutCount = 0
+
+foreach ($item in $jsonObject.value) {
+    $url = $item.url
+    $id = $item.id
+
+    # Download the file to a temporary location
+    $tempFile = "temp.txt"
+    # Send a request to get the log file
+    Invoke-WebRequest -Uri $url -Headers $AzureDevOpsAuthenicationHeader -OutFile $(build.artifactstagingdirectory)\$tempFile
+
+    # Read the first line of the file
+    $firstLine = Get-Content -Path $(build.artifactstagingdirectory)\$tempFile -TotalCount 1
+
+    # Extract the text after "starting: "
+    $startingText = $firstLine -replace '^.*starting: (.*)$', '$1'
+
+    # Remove special characters from the starting text
+    $startingText = $startingText -replace '[<>:"/\\|?*]', ''
+
+    # Check if the file name contains "Agent Job"
+    if ($startingText -like "*Job_*") {
+        $startingText = $startingText -replace "Job_", ""
+    }
+
+    # Check if the file name contains "Checkout"
+    if ($startingText -like "*Checkout*") {
+        $checkoutCount++
+        if ($checkoutCount % 2 -eq 0) {
+            $startingText = "Post-job - $startingText"
+        }
+    }
+
+    # Check if the file name contains "build status"
+    if ($startingText -like "*build status*") {
+        $startingText = "Report build status"
+    }
+
+    # Check if the file name contains "build status"
+    if ($startingText -like "*Skipping step*") {
+        $startingText = "Skipping step due to condition evaluation"
+    }
+
+    # Create the new file name
+    $newFilename = "log$id-$startingText.txt"
+
+    Write-Host $newFilename
+
+    # Rename the temporary file to the new file name
+    Rename-Item -Path $(build.artifactstagingdirectory)\$tempFile -NewName $newFilename
+
+    Write-Host "Downloading log from $url to $newFilename"
+}
+
+# Zip all files in the $(build.artifactstagingdirectory) directory
+$zipFile = "${buildStatus}_logs_${buildId}.zip"
+
+
+$filesToZip = Get-ChildItem -Path $(build.artifactstagingdirectory)\ -Filter *.txt
+Compress-Archive -Path $filesToZip.FullName -DestinationPath $(build.artifactstagingdirectory)\$zipFile -Force
+Write-Host "Zipped files to $zipFile"
+
+# Delete all log files except zip in the $(build.artifactstagingdirectory) directory
+Get-ChildItem -Path $(build.artifactstagingdirectory)\ -Filter log*.txt | Remove-Item -Force
+Write-Host "Deleted all files in the Downloads directory"
